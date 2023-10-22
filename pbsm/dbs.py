@@ -1,16 +1,29 @@
+import fnmatch
 import os
+import re
 from pathlib import Path
 import datetime
+from dataclasses import dataclass
+
 import tabula
 from pypdf import PdfReader
 import pandas as pd
 import dotenv
+import regex_spm
 
-cwd = Path(os.getcwd())
+if __name__ == "__main__":
+    import utils
+else:
+    from pbsm import utils
+
+
 dotenv.load_dotenv()
 
+APP_NAME = "pbsm"
 AREA_PAYLAH_HEADER = [18.96, 7.34, 24.28, 93.47]
 POSB_CREDIT_CARD_NUMBER = os.getenv("POSB_CREDIT_CARD_NUMBER")
+
+lg = utils.init_logger(APP_NAME)
 
 
 class PdfStatement:
@@ -49,24 +62,27 @@ class DbsStatement(PdfStatement):
         self.statement_type = self.identify_statement_type()
         match self.statement_type:
             case "creditCard":
-                print("creditCard function not ready")
+                lg.warning("creditCard function not ready")
             case "cashback":
-                print("cashback function not ready")
+                lg.warning("cashback function not ready")
             case "statementOfAccounts":
-                print("statementOfAccounts function not ready")
+                lg.warning("statementOfAccounts function not ready")
             case "paylah":
                 self.statement = PaylahStatement(self.filepath)
             case _:
                 raise NotImplementedError("unknown statement type")
 
     def identify_statement_type(self) -> str:
+        # Filename patter matching
+        if fnmatch.fnmatch(self.filepath.name, "PDF文档*.pdf"):
+            return "paylah"
+        # TODO: add more file patterns
+
         raw_txt = self.parse_pdf_to_txt()
         txt = raw_txt[:1000]
         if POSB_CREDIT_CARD_NUMBER:
             if POSB_CREDIT_CARD_NUMBER in txt:
                 return "creditCard"
-            else:
-                raise EnvironmentError("POSB_CREDIT_CARD_NUMBER")
         elif "POSB Cashback Bonus Statement" in txt:
             return "cashback"
         elif "Current and Savings Account Total" in txt:
@@ -75,6 +91,18 @@ class DbsStatement(PdfStatement):
             return "paylah"
 
         return "unknown"
+
+    def rename_consolidated_statements(self):
+        v = self.filepath.stem
+        v = v.replace(" ", "")
+        prefix = v.split("-")[0].replace(
+            "ConsolidatedStatement", "OCBC_ConsolidatedStatement"
+        )
+        datestr = "-".join(v.split("-")[1:])
+        dateobj = datetime.datetime.strptime(datestr, "%b-%y")
+        newname = f"{prefix}-{dateobj.strftime('%Y_%m')}{self.filepath.suffix}"
+        self.filepath = self.filepath.rename(newname)
+        lg.info(f"renamed to '{self.filepath.name}'")
 
 
 class PaylahStatement(PdfStatement):
@@ -86,53 +114,17 @@ class PaylahStatement(PdfStatement):
         dt_str = self.get_datetime_str()
         new_name = f"{prefix}-{dt_str}{self.filepath.suffix}"
         self.filepath = self.filepath.rename(new_name)
-        print(f"renamed to '{self.filepath.name}'")
+        lg.info(f"renamed to '{self.filepath.name}'")
 
 
-def rename_consolidated_statements(path: Path):
-    v = path.stem
-    v = v.replace(" ", "")
-    prefix = v.split("-")[0].replace(
-        "ConsolidatedStatement", "OCBC_ConsolidatedStatement"
-    )
-    datestr = "-".join(v.split("-")[1:])
-    dateobj = datetime.datetime.strptime(datestr, "%b-%y")
-    newname = f"{prefix}-{dateobj.strftime('%Y_%m')}{path.suffix}"
-    path.rename(newname)
-    print(f"renamed {path=}")
+def main():
+    pathfinder = utils.PathFinder()
+    files = pathfinder.get_pdf_files()
+    [print(x) for x in files]
 
-
-def rename_credit_card(path: Path):
-    v = path.stem.replace("OCBC GREAT EASTERN CARD-1376", "OCBC_GECard")
-    prefix = v.split("-")[0]
-    datestr = "-".join(v.split("-")[1:])
-    dateobj = datetime.datetime.strptime(datestr, "%b-%y")
-    newname = f"{prefix}-{dateobj.strftime('%Y_%m')}{path.suffix}"
-    path.rename(newname)
-    print(f"renamed {path=}")
-
-
-def rename_paylah_statement(path: Path):
-    statement = PaylahStatement(path)
-    statement.rename_filename()
-
-
-def main_paylah():
-    # files = [x for x in cwd.glob("PDF文档-*.pdf")]
-    files = [x for x in cwd.glob("paylah*.pdf")]
-    for x in files:
-        rename_paylah_statement(x)
-
-
-def main_dbs():
-    files = [x for x in cwd.glob("*.pdf")]
-    for x in files:
-        print(f"processing '{x.name}' ...")
-        stm = DbsStatement(x)
-        if stm.statement:
-            stm.statement.rename_filename()
+    stm = DbsStatement(filepath=files[1])
+    print(stm.identify_statement_type())
 
 
 if __name__ == "__main__":
-    main_paylah()
-    main_dbs()
+    main()
