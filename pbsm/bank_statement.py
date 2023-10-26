@@ -1,5 +1,6 @@
 import fnmatch
 import os
+import shutil
 import datetime
 import math
 from pathlib import Path
@@ -11,15 +12,10 @@ from pypdf import PdfReader
 import pandas as pd
 import dotenv
 
-if __name__ == "__main__":
-    import utils
-    from config import BankStatementType as Stm
-    from config import BankTransactionType as Btt
-
-else:
-    from pbsm import utils
-    from pbsm.config import BankStatementType as Stm
-    from pbsm.config import BankTransactionType as Btt
+from pbsm import utils
+from pbsm import connect
+from pbsm.config import BankStatementType as Stm
+from pbsm.config import BankTransactionType as Btt
 
 
 APP_NAME = "pbsm"
@@ -45,7 +41,7 @@ class PdfStatement:
     def __init__(self, filepath: Path):
         self.statement_date = datetime.datetime(1, 1, 1)
         self.filepath = filepath
-        self.prefix = "nil"
+        self.prefix = Stm.UNKNOWN
         self.POSB_CREDIT_CARD_NUMBER = os.getenv("POSB_CREDIT_CARD_NUMBER", default="")
         if not self.POSB_CREDIT_CARD_NUMBER:
             lg.warning("Environment variable 'POSB_CREDIT_CARD_NUMBER' not configured")
@@ -96,6 +92,23 @@ class PdfStatement:
             return Stm.DBS_PAYLAH
 
         return Stm.UNKNOWN
+
+    def post_process_sequence(self) -> int:
+        parent_dir = connect.get_nas_path("NAS_ADDR01_SMB", "NAS_ADDR01_LOCAL")
+        if not self.prefix or self.prefix == Stm.UNKNOWN:
+            raise RuntimeError("PdfStatement not initialized (StatementType is needed)")
+        archive_dir = parent_dir / self.prefix.value
+        if not archive_dir.is_dir():
+            archive_dir.mkdir()
+            lg.info(f"created {archive_dir=}")
+        path_new = archive_dir / self.filepath.name
+        old_filepath = self.filepath
+        self.filepath = shutil.copy2(self.filepath, path_new)
+        if self.filepath.is_file():
+            os.remove(old_filepath)
+            lg.info(f"removed {old_filepath=}")
+
+        return 0
 
 
 class DbsPaylahStatement(PdfStatement):
@@ -352,7 +365,7 @@ def main():
         for fp in pathfinder.get_pdf_files():
             statement = PdfStatement(filepath=fp)
             stm_type = statement.get_statement_type()
-            lg.info(f"{fp.stem} is {stm_type}")
+            lg.info(f"Processing '{fp.stem}' using '{stm_type}' ...")
 
             match stm_type:
                 case Stm.DBS_PAYLAH:
@@ -362,15 +375,15 @@ def main():
                 case _:
                     lg.warning(f"{stm_type} not implemented yet")
 
-            # TODO:
-            # break
+            statement.post_process_sequence()
+
     except Exception as e:
         lg.error(f"{e=}, {statement.filepath=}", exc_info=True)
     finally:
         pass
         if dflist:
             df = pd.concat(dflist)
-            print(df)
+            lg.info(df)
             df.to_excel("output-paylah_statements.xlsx")
 
 
