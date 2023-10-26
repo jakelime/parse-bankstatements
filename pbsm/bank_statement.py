@@ -157,9 +157,20 @@ class DbsCreditCardStatement(PdfStatement):
 
             descr = txt
             txt = next(iter_txt)
+            # Checks in case there are 2 lines of descriptions
+            if txt[:5].replace(".", "").isdigit():
+                pass
+            else:
+                descr += txt
+                txt = next(iter_txt)
 
             try:
-                amt = Decimal(txt)
+                if "CR" in txt:
+                    amt_type = Btt.CREDIT
+                    txt = txt.replace("CR", "").strip()
+                else:
+                    amt_type = Btt.DEBIT
+                amt = Decimal(txt) * amt_type.value
                 txt = next(iter_txt)
             except Exception as e:
                 lg.warning(f"{e=}")
@@ -477,19 +488,16 @@ def main():
                     dflist.append(df)
                 case Stm.DBS_CREDITCARD:
                     statement = DbsCreditCardStatement(statement.filepath)
-                    # print(f"{statement.statement_date_str=}")
                     df = statement.parse_transaction_to_dataframe()
-                    # print(df)
                     dflist.append(df)
                 case _:
                     lg.warning(f"{stm_type} not implemented yet")
 
-            # statement.post_process_sequence()
+            statement.post_process_sequence()
 
     except Exception as e:
         lg.error(f"{e=}, {statement.filepath=}", exc_info=True)
     finally:
-
         if dflist:
             df = pd.concat(dflist)
             lg.info(df)
