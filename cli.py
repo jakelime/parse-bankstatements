@@ -1,5 +1,9 @@
-from pbsm import bank_statement
+from pbsm.utils import init_logger
 from pbsm import connect
+from pbsm import bank_statement
+
+APP_NAME = "pbsm"
+lg = init_logger(APP_NAME)
 
 
 def main():

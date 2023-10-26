@@ -39,6 +39,7 @@ class DataRow:
 
 class PdfStatement:
     def __init__(self, filepath: Path):
+        self.HEADER_AREA = []
         self.statement_date = datetime.datetime(1, 1, 1)
         self.filepath = filepath
         self.prefix = Stm.UNKNOWN
@@ -65,6 +66,8 @@ class PdfStatement:
         return text
 
     def get_datetime_str(self, area: list[float]) -> str:
+        if not area:
+            raise RuntimeError("no area specified for datetime str")
         df = self.parse_pdf_to_dataframe(area=area)
         dt_str = str(df.iloc[1, 0])
         self.statement_date = datetime.datetime.strptime(dt_str, "%d %b %Y")
@@ -94,6 +97,10 @@ class PdfStatement:
         return Stm.UNKNOWN
 
     def post_process_sequence(self) -> int:
+        self.move_statement_to_datastore()
+        return 0
+
+    def move_statement_to_datastore(self) -> None:
         parent_dir = connect.get_nas_path("NAS_ADDR01_SMB", "NAS_ADDR01_LOCAL")
         if not self.prefix or self.prefix == Stm.UNKNOWN:
             raise RuntimeError("PdfStatement not initialized (StatementType is needed)")
@@ -108,7 +115,11 @@ class PdfStatement:
             os.remove(old_filepath)
             lg.info(f"removed {old_filepath=}")
 
-        return 0
+    def rename_filename(self) -> None:
+        dt_str = self.get_datetime_str(self.HEADER_AREA)
+        new_name = f"{self.prefix.value}-{dt_str}{self.filepath.suffix}"
+        self.filepath = self.filepath.rename(new_name)
+        lg.info(f"renamed to '{self.filepath.name}'")
 
 
 class DbsPaylahStatement(PdfStatement):
@@ -347,14 +358,9 @@ class DbsPaylahStatement(PdfStatement):
 
     def parse_transaction_to_dataframe(self) -> pd.DataFrame:
         # df = self.algorithm_text_to_data()
+        self.rename_filename()
         df = self.algorithm_table_to_data()
         return df
-
-    def rename_filename(self) -> None:
-        dt_str = self.get_datetime_str(self.HEADER_AREA)
-        new_name = f"{self.prefix}-{dt_str}{self.filepath.suffix}"
-        self.filepath = self.filepath.rename(new_name)
-        lg.info(f"renamed to '{self.filepath.name}'")
 
 
 def main():
