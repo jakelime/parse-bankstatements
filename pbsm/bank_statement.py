@@ -7,6 +7,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from decimal import Decimal
 
+import fitz
 import tabula
 from pypdf import PdfReader
 import pandas as pd
@@ -23,6 +24,10 @@ AREA_PAYLAH_HEADER = [18.96, 7.34, 24.28, 93.47]
 AREA_PAYLAH_PG1 = [37.53, 8.38, 95.4, 94.02]
 AREA_PAYLAH_PG2 = [15.01, 6.85, 93.93, 94.18]
 COLUMNS_BOUNDARY_PAYLAH = [15.2, 80.48]
+
+AREA_DBS_CC_HEADER = [24.94, 7.88, 29.54, 95.89]
+AREA_DBS_CC_PG1 = [44.55, 8.9, 97.46, 96.58]
+COLUMNS_BOUNDARY_DBS_CC = [14.87, 79.11, 91.94, 96.03]
 
 dotenv.load_dotenv()
 lg = utils.init_logger(APP_NAME)
@@ -120,6 +125,98 @@ class PdfStatement:
         new_name = f"{self.prefix.value}-{dt_str}{self.filepath.suffix}"
         self.filepath = self.filepath.rename(new_name)
         lg.info(f"renamed to '{self.filepath.name}'")
+
+
+class DbsCreditCardStatement(PdfStatement):
+    def __init__(self, filepath: Path):
+        super().__init__(filepath=filepath)
+        self.HEADER_AREA = AREA_DBS_CC_HEADER
+        self.prefix = Stm.DBS_CREDITCARD
+        self.statement_date_str = self.get_datetime_str(
+            area=self.HEADER_AREA
+        )  # run this to set dt_object
+
+    def algorithm_text_to_data(self, txtlist: list[str]) -> pd.DataFrame:
+        iter_txt = iter(txtlist)
+        txt = next(iter_txt)
+        if "NEW TRANSACTIONS" not in txt:
+            raise RuntimeError("Unxpected text results from parsing")
+        else:
+            txt = next(iter_txt)
+        datarows = []
+        while txt:
+            if "SUB-TOTAL:" in txt:
+                break
+            try:
+                dt_str = f"{txt} {self.statement_date.year}"
+                dt_obj = datetime.datetime.strptime(dt_str, "%d %b %Y")
+                txt = next(iter_txt)
+            except Exception as e:
+                lg.warning(f"{e=}")
+                break
+
+            descr = txt
+            txt = next(iter_txt)
+
+            try:
+                amt = Decimal(txt)
+                txt = next(iter_txt)
+            except Exception as e:
+                lg.warning(f"{e=}")
+                break
+
+            datarows.append(
+                DataRow(
+                    date=dt_obj,
+                    descr=descr,
+                    amount=amt,
+                    reference_number="",
+                    reference_filename=self.filepath.name,
+                )
+            )
+        return pd.DataFrame(datarows)
+
+    def parse_pdf_to_text(self) -> list[str]:
+        keywords = [
+            "DATE",
+            "DESCRIPTION",
+            "AMOUNT (S$)",
+            "NEW TRANSACTIONS",
+        ]
+        keyword_ending = "GRAND TOTAL FOR ALL CARD ACCOUNTS:"
+        is_data_start = False
+        is_ended = False
+        useful_lines = []
+        for page in fitz.open(self.filepath):
+            if is_ended:
+                break
+            text = page.get_text()
+            for line in text.splitlines():
+                if is_ended:
+                    break
+
+                for i, kw in enumerate(keywords):
+                    if kw in line:
+                        keywords.pop(i)
+                    if not keywords:
+                        is_data_start = True
+
+                if is_data_start:
+                    useful_lines.append(line)
+
+                if line == keyword_ending:
+                    is_ended = True
+
+        return useful_lines
+
+    def parse_transaction_to_dataframe(self) -> pd.DataFrame:
+        self.rename_filename()
+        txtlist = self.parse_pdf_to_text()
+        if not txtlist:
+            lg.warning("no transaction found!")
+            return pd.DataFrame()
+        df = self.algorithm_text_to_data(txtlist)
+        return df
 
 
 class DbsPaylahStatement(PdfStatement):
@@ -378,19 +475,25 @@ def main():
                     statement = DbsPaylahStatement(statement.filepath)
                     df = statement.parse_transaction_to_dataframe()
                     dflist.append(df)
+                case Stm.DBS_CREDITCARD:
+                    statement = DbsCreditCardStatement(statement.filepath)
+                    # print(f"{statement.statement_date_str=}")
+                    df = statement.parse_transaction_to_dataframe()
+                    # print(df)
+                    dflist.append(df)
                 case _:
                     lg.warning(f"{stm_type} not implemented yet")
 
-            statement.post_process_sequence()
+            # statement.post_process_sequence()
 
     except Exception as e:
         lg.error(f"{e=}, {statement.filepath=}", exc_info=True)
     finally:
-        pass
+
         if dflist:
             df = pd.concat(dflist)
             lg.info(df)
-            df.to_excel("output-paylah_statements.xlsx")
+            df.to_excel("output-compiled.xlsx")
 
 
 if __name__ == "__main__":
